@@ -15,7 +15,7 @@ TABLE = """# Candidates
 | pickle breaks | 1 | delivered |
 | hostname space | 4 | delivered |
 | docs stale | 1, 2 | delivered |
-| lifetime text | 3 | dropped: base prints the same text, probe p3 |
+| lifetime text | 3 | dropped: same at base: base prints the same text, probe p3 |
 """
 
 
@@ -45,10 +45,27 @@ class RemainingTest(unittest.TestCase):
         self.assertIn("- hostname space", result.stdout)
 
     def test_drop_needs_counterevidence(self):
-        result = run("remaining.py", "--finders", "4", self.table(TABLE.replace("dropped: base prints", "dropped:")
+        result = run("remaining.py", "--finders", "4", self.table(TABLE.replace("dropped: same at base: base prints", "dropped: same at base:")
                                                                   .replace(" the same text, probe p3", "")))
         self.assertEqual(result.returncode, 1)
         self.assertIn("- lifetime text", result.stdout)
+
+    def test_drop_needs_an_allowed_ground(self):
+        for reason in ("minor, efficiency only", "base prints the same text", "never compared"):
+            result = run("remaining.py", self.table(TABLE.replace("same at base: base prints the same text, probe p3", reason)))
+            self.assertEqual(result.returncode, 1, reason)
+            self.assertIn("- lifetime text", result.stdout)
+            self.assertIn("A drop names its ground", result.stdout)
+        for ground in ("absent at head", "same at base", "documented intent", "Same At Base"):
+            result = run("remaining.py", self.table(TABLE.replace("same at base: base prints", f"{ground}: base prints")))
+            self.assertEqual(result.returncode, 0, ground)
+
+    def test_without_finders_checks_dispositions_only(self):
+        result = run("remaining.py", self.table(TABLE))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "7 candidates: 5 delivered, 2 merged or dropped.\n")
+        result = run("remaining.py", self.table(TABLE.replace("| 4 | delivered |", "| 4 | maybe |")))
+        self.assertEqual(result.returncode, 1)
 
     def test_missing_columns_exit_2(self):
         self.assertEqual(run("remaining.py", "--finders", "4", self.table("| a | b |\n|---|---|\n| x | y |\n")).returncode, 2)
