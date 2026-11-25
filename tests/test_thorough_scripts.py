@@ -105,5 +105,93 @@ class FailurePointsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
 
+class SweepUnitsTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.repo = Path(self.dir.name, "repo")
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.commit({"lock.py": "class Lock:\n    def take(self):\n        return 1\n\n    def give(self):\n        return 2\n",
+                     "cli.py": "from lock import Lock\nLock().take()\n"})
+        self.commit({"lock.py": "import os\n\nclass Lock:\n    def take(self):\n        return os.open('x', 0)\n\n"
+                                "    def give(self):\n        return 3\n",
+                     "tests/test_lock.py": "def test_take():\n    assert True\n", "README.md": "Locks.\n"})
+        self.out = Path(self.dir.name, "search")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                       check=True, capture_output=True)
+
+    def commit(self, files):
+        for name, text in files.items():
+            Path(self.repo, name).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.repo, name).write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "change")
+
+    def seed(self, *extra):
+        return run("sweep_units.py", "seed", "--base", "HEAD~1", "--head", "HEAD", "--repo", str(self.repo),
+                   "--out", str(self.out), *extra)
+
+    def test_seed_assigns_units_to_each_focus(self):
+        result = self.seed()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("5 units, 1 failure points.", result.stdout)
+        general = (self.out / "finder-general" / "sweep.md").read_text()
+        for unit in ("lock.py::Lock.take", "lock.py::Lock.give", "lock.py::module level",
+                     "tests/test_lock.py (file)", "README.md (file)"):
+            self.assertIn(f"`{unit}`", general)
+        self.assertIn("`cli.py`", general)
+        consumers = (self.out / "finder-consumers" / "sweep.md").read_text()
+        self.assertIn("README.md (file)", consumers)
+        self.assertNotIn("tests/test_lock.py", consumers)
+        inputs = (self.out / "finder-inputs" / "sweep.md").read_text()
+        self.assertNotIn("README.md", inputs)
+        self.assertIn("`lock.py:5`", (self.out / "lead-fault" / "sweep.md").read_text())
+        self.assertFalse((self.out / "finder-fault").exists())
+
+    def test_same_pins_give_the_same_sweeps(self):
+        self.seed()
+        first = {p.relative_to(self.out): p.read_text() for p in self.out.rglob("*") if p.is_file()}
+        other = Path(self.dir.name, "again")
+        run("sweep_units.py", "seed", "--base", "HEAD~1", "--head", "HEAD", "--repo", str(self.repo), "--out", str(other))
+        second = {p.relative_to(other): p.read_text() for p in other.rglob("*") if p.is_file()}
+        self.assertEqual(first, second)
+
+    def test_long_lists_split_into_shards(self):
+        result = self.seed("--shard-size", "2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("finder-general-1/sweep.md", result.stdout)
+        self.assertIn("finder-general-3/sweep.md", result.stdout)
+        self.assertNotIn("finder-general-4", result.stdout)
+
+    def test_check_needs_a_verdict_in_every_row(self):
+        self.seed()
+        result = run("sweep_units.py", "check", str(self.out))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("row lock.py::Lock.take has no valid verdict", result.stdout)
+        for sweep in self.out.glob("*/sweep.md"):
+            text = sweep.read_text().replace("| |\n", "| clean: returns before any shared state |\n")
+            sweep.write_text(text)
+        result = run("sweep_units.py", "check", str(self.out))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("clean", result.stdout)
+        general = self.out / "finder-general" / "sweep.md"
+        general.write_text(general.read_text().replace("clean: returns before any shared state |\n", "maybe |\n", 1))
+        self.assertEqual(run("sweep_units.py", "check", str(self.out)).returncode, 1)
+        lines = [line for line in general.read_text().splitlines() if "Lock.give" not in line]
+        general.write_text("\n".join(lines))
+        result = run("sweep_units.py", "check", str(self.out))
+        self.assertIn("row lock.py::Lock.give is missing", result.stdout)
+
+    def test_seed_refuses_an_existing_plan_and_bad_pins(self):
+        self.seed()
+        self.assertEqual(self.seed().returncode, 2)
+        result = run("sweep_units.py", "seed", "--base", "nope", "--head", "HEAD", "--repo", str(self.repo),
+                     "--out", str(Path(self.dir.name, "other")))
+        self.assertEqual(result.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

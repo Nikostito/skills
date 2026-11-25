@@ -7,16 +7,25 @@ predictions and include material questions and review limits.
 One read of a change finds part of what repeated reads find. On two public
 pull requests, one read reported about a third to a half of what five reads
 reported together. The default is one read. A **thorough** search, asked for
-in words such as "thorough" or "find everything", runs four or five
-independent finders. One is general. Three have their own focus: what code
+in words such as "thorough" or "find everything", runs independent finders
+in parallel. One is general. Three have their own focus: what code
 outside the change sees (callers, subclasses, hooks, docs), the values the
 change treats differently (arguments, defaults, options, platforms), and
 shared state. A fifth makes each added file, process, or network call fail
 and gives each new path a hostile filesystem state; it runs when the change
 adds five or more such calls, and otherwise the lead fails each one itself.
-The lead runs the type checker and the other shared checks once, records a
-decision for every candidate the finders return, and confirms each delivered
-one with a probe at base and head. A drop names its ground: absent at the
+A script lists the units of the change (each changed function or method, the
+changed lines outside a definition, and each changed test, prose, or
+configuration file) and gives each finder a fixed table of the units it must
+answer. Every row gets a verdict: clean, candidate, or not applicable, with
+the line that settles it. A table longer than 20 rows splits into shards that
+run as separate finders, so a large change takes about as long as a small one.
+The same pins give the same tables on every run: runs cover the same ground,
+and a defect one run missed traces to one row. The lead prepares base and head
+worktrees once, runs the type checker and the other shared checks once,
+records a decision for every candidate the finders return, and confirms each
+delivered one with a probe at base and head, with the confirmations in
+parallel. A drop names its ground: absent at the
 head, the same at the base, or documented intent. A confirmed small change
 is delivered as a minor observation. `evals/thorough-focus/` records how
 focused finders compared with three general finders on four public pull
@@ -66,6 +75,10 @@ delivery says how many reads searched the change.
 Dependency checks use the project's supported-version commands, constraints,
 and resolver in a fresh environment.
 
+The sweep helper seeds the thorough search's tables from the base and head,
+with up to eight files outside the change that name each unit, and checks
+that every row has a verdict. It refuses a folder that already holds a plan.
+
 The remaining-share helper reads the thorough search's candidate table. It
 exits 1 while a candidate has no decision or a drop names no allowed ground.
 With `--finders`, it also estimates, from how many finders returned each
@@ -73,8 +86,8 @@ delivered candidate, what share of what such reads find this search found
 (the bias-corrected Chao2 estimator). The estimate holds only for finders
 with the same assignment, so the thorough search leaves it out. The
 failure-point helper lists the added lines that open, read, write, close,
-rename, delete, lock, spawn, or connect; the lead uses the count to decide
-whether the fault finder runs.
+rename, delete, lock, spawn, or connect; the sweep helper uses the count to
+decide whether the fault finder runs.
 
 The static-delta helper runs a type checker or linter command in an exported
 copy of two commits and prints the diagnostics the head has and the base
